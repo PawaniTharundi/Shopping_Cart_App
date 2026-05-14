@@ -6,6 +6,7 @@ const FacebookStrategy = require("passport-facebook").Strategy;
 const GitHubStrategy = require("passport-github").Strategy;
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const PasskeyChallenge = require("../models/PasskeyChallenge");
 const {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -16,7 +17,7 @@ const { isoBase64URL } = require("@simplewebauthn/server/helpers");
 
 const router = express.Router();
 
-// ---------- Helper to issue JWT cookie ----------
+// Helper to set JWT cookie
 const setTokenCookie = (res, userId, isAdmin) => {
   const token = jwt.sign({ userId, isAdmin }, process.env.JWT_SECRET, {
     expiresIn: "7d",
@@ -50,7 +51,6 @@ passport.use(
     },
   ),
 );
-
 router.get(
   "/google",
   passport.authenticate("google", { scope: ["profile", "email"] }),
@@ -87,7 +87,6 @@ passport.use(
     },
   ),
 );
-
 router.get(
   "/facebook",
   passport.authenticate("facebook", { scope: ["email"] }),
@@ -110,7 +109,6 @@ passport.use(
       callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/github/callback`,
     },
     async (accessToken, refreshToken, profile, done) => {
-      // GitHub may not return email; fallback to username@github.com
       let email =
         profile.emails?.[0]?.value || `${profile.username}@github.com`;
       let user = await User.findOne({ email });
@@ -126,7 +124,6 @@ passport.use(
     },
   ),
 );
-
 router.get(
   "/github",
   passport.authenticate("github", { scope: ["user:email"] }),
@@ -140,93 +137,224 @@ router.get(
   },
 );
 
-// ---------- Passkey (WebAuthn) Registration ----------
+// ---------- Passkey (WebAuthn) ----------
+function extractChallengeFromResponse(attestationResponse) {
+  try {
+    const clientDataJSON = attestationResponse.response.clientDataJSON;
+    const clientData = JSON.parse(
+      Buffer.from(clientDataJSON, "base64").toString(),
+    );
+    return clientData.challenge;
+  } catch (e) {
+    console.error("Failed to extract challenge:", e);
+    return null;
+  }
+}
+
+// REGISTRATION - BEGIN
 router.post("/passkey/register/begin", async (req, res) => {
   const { email, name } = req.body;
+  if (!email || !name) {
+    return res.status(400).json({ error: "Email and name are required" });
+  }
   let user = await User.findOne({ email });
-  if (user) return res.status(400).json({ error: "Email already registered" });
+  if (user) {
+    return res.status(400).json({ error: "Email already registered" });
+  }
 
-  const passkeyUserId = crypto.randomBytes(16).toString("base64url");
-  const options = await generateRegistrationOptions({
-    rpName: process.env.RP_NAME,
-    rpID: process.env.RP_ID,
-    userID: passkeyUserId,
-    userName: email,
-    attestationType: "none",
+  const userID = crypto.randomBytes(32);
+  let options;
+  try {
+    options = await generateRegistrationOptions({
+      rpName: process.env.RP_NAME || "Shopping Cart App",
+      rpID: process.env.RP_ID || "localhost",
+      userID: userID,
+      userName: email,
+      attestationType: "none",
+      authenticatorSelection: {
+        residentKey: "preferred",
+        userVerification: "preferred",
+      },
+    });
+  } catch (err) {
+    console.error("Error generating registration options:", err);
+    return res.status(500).json({ error: err.message });
+  }
+
+  await PasskeyChallenge.create({
+    challenge: options.challenge,
+    data: { userID: isoBase64URL.fromBuffer(userID), email, name },
   });
-  // Store challenge temporarily (in production, store in session/redis)
-  res.locals.challenge = options.challenge;
-  res.json({ options, passkeyUserId });
+
+  res.json({
+    options,
+    passkeyUserId: isoBase64URL.fromBuffer(userID),
+  });
 });
 
+// REGISTRATION - VERIFY
 router.post("/passkey/register/verify", async (req, res) => {
-  const { email, name, passkeyUserId, attestationResponse } = req.body;
-  const verification = await verifyRegistrationResponse({
-    response: attestationResponse,
-    expectedChallenge: req.locals?.challenge,
-    expectedOrigin: process.env.ORIGIN,
-    expectedRPID: process.env.RP_ID,
-  });
-  if (!verification.verified)
+  const { email, name, attestationResponse } = req.body;
+  const challenge = extractChallengeFromResponse(attestationResponse);
+  if (!challenge) {
+    return res.status(400).json({ error: "Invalid attestation response" });
+  }
+
+  const stored = await PasskeyChallenge.findOne({ challenge });
+  if (!stored) {
+    return res.status(400).json({ error: "Challenge not found or expired" });
+  }
+
+  let verification;
+  try {
+    verification = await verifyRegistrationResponse({
+      response: attestationResponse,
+      expectedChallenge: challenge,
+      expectedOrigin: process.env.ORIGIN || "http://localhost:3000",
+      expectedRPID: process.env.RP_ID || "localhost",
+      requireUserVerification: false,
+    });
+  } catch (err) {
+    console.error("Verification error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+
+  if (!verification.verified) {
     return res.status(400).json({ error: "Verification failed" });
+  }
 
   const { credentialPublicKey, credentialID, counter } =
     verification.registrationInfo;
   const user = new User({
-    email,
-    name,
+    email: stored.data.email,
+    name: stored.data.name,
     authProvider: "passkey",
-    passkeyUserId,
+    passkeyUserId: stored.data.userID,
     credentialID: isoBase64URL.fromBuffer(credentialID),
     publicKey: isoBase64URL.fromBuffer(credentialPublicKey),
     counter,
   });
   await user.save();
+  await PasskeyChallenge.deleteOne({ challenge });
   setTokenCookie(res, user._id, user.isAdmin);
   res.json({ success: true });
 });
 
-// ---------- Passkey Login ----------
+// LOGIN - BEGIN (this is where the 500 error occurs)
 router.post("/passkey/login/begin", async (req, res) => {
   const { email } = req.body;
-  const user = await User.findOne({ email });
-  if (!user || user.authProvider !== "passkey")
-    return res.status(404).json({ error: "User not found" });
+  if (!email) {
+    return res.status(400).json({ error: "Email required" });
+  }
 
-  const options = await generateAuthenticationOptions({
-    rpID: process.env.RP_ID,
-    allowCredentials: [
-      {
-        id: isoBase64URL.toBuffer(user.credentialID),
-        type: "public-key",
-      },
-    ],
-  });
-  res.locals.challenge = options.challenge;
-  res.json({ options, user: { id: user._id, email: user.email } });
+  console.log("[Passkey] Login attempt for email:", email);
+
+  let user;
+  try {
+    user = await User.findOne({ email });
+    if (!user) {
+      console.log("[Passkey] User not found");
+      return res.status(404).json({ error: "No user found with this email" });
+    }
+    if (user.authProvider !== "passkey") {
+      console.log("[Passkey] User does not have passkey auth provider");
+      return res
+        .status(404)
+        .json({ error: "No passkey registered for this email" });
+    }
+    if (!user.credentialID || !user.publicKey) {
+      console.error(
+        "[Passkey] User missing credentialID or publicKey:",
+        user.email,
+      );
+      return res
+        .status(500)
+        .json({ error: "Invalid passkey data. Please re-register." });
+    }
+  } catch (err) {
+    console.error("[Passkey] Database error on login/begin:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
+
+  let options;
+  try {
+    options = await generateAuthenticationOptions({
+      rpID: process.env.RP_ID || "localhost",
+      userVerification: "preferred",
+      allowCredentials: [
+        {
+          id: isoBase64URL.toBuffer(user.credentialID),
+          type: "public-key",
+        },
+      ],
+    });
+  } catch (err) {
+    console.error("[Passkey] Error generating authentication options:", err);
+    return res.status(500).json({ error: err.message });
+  }
+
+  try {
+    await PasskeyChallenge.create({
+      challenge: options.challenge,
+      data: { email },
+    });
+  } catch (err) {
+    console.error("[Passkey] Error saving challenge:", err);
+    return res.status(500).json({ error: "Failed to save challenge" });
+  }
+
+  console.log("[Passkey] Login options generated successfully for", email);
+  res.json({ options });
 });
 
+// LOGIN - VERIFY
 router.post("/passkey/login/verify", async (req, res) => {
   const { email, attestationResponse } = req.body;
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ error: "User not found" });
+  const challenge = extractChallengeFromResponse(attestationResponse);
+  if (!challenge) {
+    return res.status(400).json({ error: "Invalid assertion response" });
+  }
 
-  const verification = await verifyAuthenticationResponse({
-    response: attestationResponse,
-    expectedChallenge: req.locals?.challenge,
-    expectedOrigin: process.env.ORIGIN,
-    expectedRPID: process.env.RP_ID,
-    authenticator: {
-      credentialID: isoBase64URL.toBuffer(user.credentialID),
-      credentialPublicKey: isoBase64URL.toBuffer(user.publicKey),
-      counter: user.counter,
-    },
-  });
-  if (!verification.verified)
+  const stored = await PasskeyChallenge.findOne({ challenge });
+  if (!stored) {
+    return res.status(400).json({ error: "Challenge not found or expired" });
+  }
+
+  let user;
+  try {
+    user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
+  } catch (err) {
+    console.error("Database error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
+
+  let verification;
+  try {
+    verification = await verifyAuthenticationResponse({
+      response: attestationResponse,
+      expectedChallenge: challenge,
+      expectedOrigin: process.env.ORIGIN || "http://localhost:3000",
+      expectedRPID: process.env.RP_ID || "localhost",
+      authenticator: {
+        credentialID: isoBase64URL.toBuffer(user.credentialID),
+        credentialPublicKey: isoBase64URL.toBuffer(user.publicKey),
+        counter: user.counter,
+      },
+      requireUserVerification: false,
+    });
+  } catch (err) {
+    console.error("Authentication verification error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+
+  if (!verification.verified) {
     return res.status(400).json({ error: "Authentication failed" });
+  }
 
   user.counter = verification.authenticationInfo.newCounter;
   await user.save();
+  await PasskeyChallenge.deleteOne({ challenge });
   setTokenCookie(res, user._id, user.isAdmin);
   res.json({ success: true });
 });
