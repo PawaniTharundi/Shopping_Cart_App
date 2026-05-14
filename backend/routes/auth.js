@@ -3,6 +3,7 @@ const express = require("express");
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const FacebookStrategy = require("passport-facebook").Strategy;
+const GitHubStrategy = require("passport-github").Strategy;
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const {
@@ -100,6 +101,45 @@ router.get(
   },
 );
 
+// ---------- GitHub OAuth ----------
+passport.use(
+  new GitHubStrategy(
+    {
+      clientID: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET,
+      callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/github/callback`,
+    },
+    async (accessToken, refreshToken, profile, done) => {
+      // GitHub may not return email; fallback to username@github.com
+      let email =
+        profile.emails?.[0]?.value || `${profile.username}@github.com`;
+      let user = await User.findOne({ email });
+      if (!user) {
+        user = new User({
+          email: email,
+          name: profile.displayName || profile.username,
+          authProvider: "github",
+        });
+        await user.save();
+      }
+      return done(null, user);
+    },
+  ),
+);
+
+router.get(
+  "/github",
+  passport.authenticate("github", { scope: ["user:email"] }),
+);
+router.get(
+  "/github/callback",
+  passport.authenticate("github", { session: false }),
+  (req, res) => {
+    setTokenCookie(res, req.user._id, req.user.isAdmin);
+    res.redirect(process.env.FRONTEND_URL);
+  },
+);
+
 // ---------- Passkey (WebAuthn) Registration ----------
 router.post("/passkey/register/begin", async (req, res) => {
   const { email, name } = req.body;
@@ -123,7 +163,7 @@ router.post("/passkey/register/verify", async (req, res) => {
   const { email, name, passkeyUserId, attestationResponse } = req.body;
   const verification = await verifyRegistrationResponse({
     response: attestationResponse,
-    expectedChallenge: req.locals?.challenge, // simplified – use proper storage
+    expectedChallenge: req.locals?.challenge,
     expectedOrigin: process.env.ORIGIN,
     expectedRPID: process.env.RP_ID,
   });

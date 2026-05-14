@@ -6,7 +6,7 @@ const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
 
 export const useCart = () => useContext(CartContext);
 
-export const CartProvider = ({ children }) => {
+export const CartProvider = ({ children, user }) => {
   const [cart, setCart] = useState({ items: [] });
   const [total, setTotal] = useState(0);
 
@@ -58,10 +58,16 @@ export const CartProvider = ({ children }) => {
     await fetchTotal();
   };
 
+  // Automatically fetch cart when user logs in, clear when logged out
   useEffect(() => {
-    fetchCart();
-    fetchTotal();
-  }, []);
+    if (user) {
+      fetchCart();
+      fetchTotal();
+    } else {
+      setCart({ items: [] });
+      setTotal(0);
+    }
+  }, [user]);
 
   return (
     <CartContext.Provider

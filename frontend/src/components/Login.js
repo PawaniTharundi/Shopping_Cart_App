@@ -13,6 +13,7 @@ const Login = ({ setUser }) => {
 
   const handleGoogle = () => (window.location.href = `${API}/auth/google`);
   const handleFacebook = () => (window.location.href = `${API}/auth/facebook`);
+  const handleGitHub = () => (window.location.href = `${API}/auth/github`);
 
   const handlePasskeyRegister = async () => {
     try {
@@ -93,6 +94,12 @@ const Login = ({ setUser }) => {
               className="w-full bg-blue-700 hover:bg-blue-800 text-white py-2 rounded-lg transition"
             >
               Sign in with Facebook
+            </button>
+            <button
+              onClick={handleGitHub}
+              className="w-full bg-gray-800 hover:bg-gray-900 text-white py-2 rounded-lg transition"
+            >
+              Sign in with GitHub
             </button>
             <button
               onClick={handlePasskeyRegister}

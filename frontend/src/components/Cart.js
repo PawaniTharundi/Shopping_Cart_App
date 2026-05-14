@@ -1,8 +1,28 @@
 import React from "react";
 import { useCart } from "../contexts/CartContext";
+import { useUser } from "../contexts/UserContext";
+import { Link } from "react-router-dom";
 
 const Cart = () => {
   const { cart, total, updateQuantity, removeItem } = useCart();
+  const user = useUser();
+
+  if (!user) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 py-16 text-center">
+        <div className="text-6xl mb-4">🔒</div>
+        <h2 className="text-2xl font-semibold text-gray-700">
+          Please log in to view your cart
+        </h2>
+        <Link
+          to="/login"
+          className="mt-4 inline-block bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700"
+        >
+          Go to Login
+        </Link>
+      </div>
+    );
+  }
 
   if (cart.items.length === 0) {
     return (
@@ -75,7 +95,9 @@ const Cart = () => {
                 cart.items
                   .map(
                     (i) =>
-                      `${i.product.name} x${i.quantity} = $${(i.product.price * i.quantity).toFixed(2)}`,
+                      `${i.product.name} x${i.quantity} = $${(
+                        i.product.price * i.quantity
+                      ).toFixed(2)}`,
                   )
                   .join("\n") +
                 `\n\nTotal: $${total.toFixed(2)}`,

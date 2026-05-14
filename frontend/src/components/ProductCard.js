@@ -1,8 +1,20 @@
 import React from "react";
+import { useNavigate } from "react-router-dom";
 import { useCart } from "../contexts/CartContext";
+import { useUser } from "../contexts/UserContext";
 
 const ProductCard = ({ product }) => {
   const { addToCart } = useCart();
+  const user = useUser();
+  const navigate = useNavigate();
+
+  const handleAddToCart = () => {
+    if (!user) {
+      navigate("/login");
+      return;
+    }
+    addToCart(product._id, 1);
+  };
 
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300">
@@ -21,7 +33,7 @@ const ProductCard = ({ product }) => {
             ${product.price}
           </span>
           <button
-            onClick={() => addToCart(product._id, 1)}
+            onClick={handleAddToCart}
             className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1"
           >
             🛒 Add
