@@ -56,8 +56,8 @@ const connectDB = async () => {
 };
 
 // Connect on every request (required for Vercel serverless)
-app.use(async (req, res, next) => {
-  await connectDB();
+app.use((req, res, next) => {
+  connectDB().catch(console.error);
   next();
 });
 
