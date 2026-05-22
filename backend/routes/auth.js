@@ -29,34 +29,52 @@ const setTokenCookie = (res, userId, isAdmin) => {
   });
 };
 
-// ---------- Google OAuth ----------
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/google/callback`,
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      let user = await User.findOne({ email: profile.emails[0].value });
-      if (!user) {
-        user = new User({
-          email: profile.emails[0].value,
-          name: profile.displayName,
-          authProvider: "google",
-        });
-        await user.save();
-      }
-      return done(null, user);
-    },
-  ),
-);
+// ---------- Google OAuth (only if credentials exist) ----------
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/google/callback`,
+      },
+      async (accessToken, refreshToken, profile, done) => {
+        let user = await User.findOne({ email: profile.emails[0].value });
+        if (!user) {
+          user = new User({
+            email: profile.emails[0].value,
+            name: profile.displayName,
+            authProvider: "google",
+          });
+          await user.save();
+        }
+        return done(null, user);
+      },
+    ),
+  );
+  console.log("Google OAuth enabled");
+} else {
+  console.log("Google OAuth disabled - missing credentials");
+}
+
 router.get(
   "/google",
+  (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(503).json({ error: "Google OAuth not configured" });
+    }
+    next();
+  },
   passport.authenticate("google", { scope: ["profile", "email"] }),
 );
 router.get(
   "/google/callback",
+  (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(503).json({ error: "Google OAuth not configured" });
+    }
+    next();
+  },
   passport.authenticate("google", { session: false }),
   (req, res) => {
     setTokenCookie(res, req.user._id, req.user.isAdmin);
@@ -64,35 +82,53 @@ router.get(
   },
 );
 
-// ---------- Facebook OAuth ----------
-passport.use(
-  new FacebookStrategy(
-    {
-      clientID: process.env.FACEBOOK_APP_ID,
-      clientSecret: process.env.FACEBOOK_APP_SECRET,
-      callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/facebook/callback`,
-      profileFields: ["id", "displayName", "emails"],
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      let user = await User.findOne({ email: profile.emails[0].value });
-      if (!user) {
-        user = new User({
-          email: profile.emails[0].value,
-          name: profile.displayName,
-          authProvider: "facebook",
-        });
-        await user.save();
-      }
-      return done(null, user);
-    },
-  ),
-);
+// ---------- Facebook OAuth (only if credentials exist) ----------
+if (process.env.FACEBOOK_APP_ID && process.env.FACEBOOK_APP_SECRET) {
+  passport.use(
+    new FacebookStrategy(
+      {
+        clientID: process.env.FACEBOOK_APP_ID,
+        clientSecret: process.env.FACEBOOK_APP_SECRET,
+        callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/facebook/callback`,
+        profileFields: ["id", "displayName", "emails"],
+      },
+      async (accessToken, refreshToken, profile, done) => {
+        let user = await User.findOne({ email: profile.emails[0].value });
+        if (!user) {
+          user = new User({
+            email: profile.emails[0].value,
+            name: profile.displayName,
+            authProvider: "facebook",
+          });
+          await user.save();
+        }
+        return done(null, user);
+      },
+    ),
+  );
+  console.log("Facebook OAuth enabled");
+} else {
+  console.log("Facebook OAuth disabled - missing credentials");
+}
+
 router.get(
   "/facebook",
+  (req, res, next) => {
+    if (!process.env.FACEBOOK_APP_ID) {
+      return res.status(503).json({ error: "Facebook OAuth not configured" });
+    }
+    next();
+  },
   passport.authenticate("facebook", { scope: ["email"] }),
 );
 router.get(
   "/facebook/callback",
+  (req, res, next) => {
+    if (!process.env.FACEBOOK_APP_ID) {
+      return res.status(503).json({ error: "Facebook OAuth not configured" });
+    }
+    next();
+  },
   passport.authenticate("facebook", { session: false }),
   (req, res) => {
     setTokenCookie(res, req.user._id, req.user.isAdmin);
@@ -100,36 +136,54 @@ router.get(
   },
 );
 
-// ---------- GitHub OAuth ----------
-passport.use(
-  new GitHubStrategy(
-    {
-      clientID: process.env.GITHUB_CLIENT_ID,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET,
-      callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/github/callback`,
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      let email =
-        profile.emails?.[0]?.value || `${profile.username}@github.com`;
-      let user = await User.findOne({ email });
-      if (!user) {
-        user = new User({
-          email: email,
-          name: profile.displayName || profile.username,
-          authProvider: "github",
-        });
-        await user.save();
-      }
-      return done(null, user);
-    },
-  ),
-);
+// ---------- GitHub OAuth (only if credentials exist) ----------
+if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+  passport.use(
+    new GitHubStrategy(
+      {
+        clientID: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET,
+        callbackURL: `${process.env.BACKEND_URL || "http://localhost:5000"}/api/auth/github/callback`,
+      },
+      async (accessToken, refreshToken, profile, done) => {
+        let email =
+          profile.emails?.[0]?.value || `${profile.username}@github.com`;
+        let user = await User.findOne({ email });
+        if (!user) {
+          user = new User({
+            email: email,
+            name: profile.displayName || profile.username,
+            authProvider: "github",
+          });
+          await user.save();
+        }
+        return done(null, user);
+      },
+    ),
+  );
+  console.log("GitHub OAuth enabled");
+} else {
+  console.log("GitHub OAuth disabled - missing credentials");
+}
+
 router.get(
   "/github",
+  (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID) {
+      return res.status(503).json({ error: "GitHub OAuth not configured" });
+    }
+    next();
+  },
   passport.authenticate("github", { scope: ["user:email"] }),
 );
 router.get(
   "/github/callback",
+  (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID) {
+      return res.status(503).json({ error: "GitHub OAuth not configured" });
+    }
+    next();
+  },
   passport.authenticate("github", { session: false }),
   (req, res) => {
     setTokenCookie(res, req.user._id, req.user.isAdmin);
@@ -240,7 +294,7 @@ router.post("/passkey/register/verify", async (req, res) => {
   res.json({ success: true });
 });
 
-// LOGIN - BEGIN (this is where the 500 error occurs)
+// LOGIN - BEGIN
 router.post("/passkey/login/begin", async (req, res) => {
   const { email } = req.body;
   if (!email) {
